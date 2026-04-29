@@ -134,8 +134,8 @@ jobs:
             export JWT_SECRET="${{ secrets.JWT_SECRET }}"
             export API_IMAGE="${{ env.API_IMAGE }}:latest"
 
-            docker compose -f docker-compose.prod.yml pull api
-            docker compose -f docker-compose.prod.yml up -d
+            docker-compose -f docker-compose.prod.yml pull api
+            docker-compose -f docker-compose.prod.yml up -d
 
             # Cleanup old images
             docker image prune -f
