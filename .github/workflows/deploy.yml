@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  API_IMAGE: ghcr.io/${{ github.repository }}/task-api
+  API_IMAGE: ghcr.io/govinsaga/task-management-saas-app/task-api
 
 jobs:
   build-and-deploy:
