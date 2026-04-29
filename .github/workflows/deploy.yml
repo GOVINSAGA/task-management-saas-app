@@ -99,7 +99,7 @@ jobs:
                 image: $API_IMAGE
                 container_name: taskmanager-api-prod
                 ports:
-                  - "5002:5002"
+                  - "5003:5002"
                 environment:
                   NODE_ENV: production
                   PORT: 5002
