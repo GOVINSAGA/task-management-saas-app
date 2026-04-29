@@ -1,3 +1,6 @@
+🚀 Production-Ready Full Stack Application  
+🔐 JWT Authentication | 📦 Dockerized | ☁️ Cloud Deployed  
+
 # TaskFlow — Mini SaaS Task Management System
 
 A production-ready, full-stack task management application with secure JWT authentication, multi-user support, and automated CI/CD deployment to OCI.
