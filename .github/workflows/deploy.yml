@@ -1,0 +1,159 @@
+name: Build & Deploy to OCI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/${{ github.repository }}/task-api
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # ─── Checkout ────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ─── Build & Push API Docker Image ───────────────────
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:latest
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+
+      # ─── Build React Frontend ────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./client
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./client
+        env:
+          VITE_API_URL: https://taskManagement.govinsaga.pp.ua/api
+        run: npm run build
+
+      # ─── Deploy to OCI Server ───────────────────────────
+      - name: Deploy to OCI
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USER }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script: |
+            # Create app directory if not exists
+            mkdir -p ~/task-manager
+            mkdir -p /var/www/tasks-ui
+
+            # Pull latest docker-compose.prod.yml
+            cd ~/task-manager
+
+            # Create/update docker-compose file
+            cat > docker-compose.prod.yml << 'COMPOSE_EOF'
+            version: '3.8'
+
+            services:
+              db:
+                image: postgres:16-alpine
+                container_name: taskmanager-db-prod
+                environment:
+                  POSTGRES_DB: taskmanager_db
+                  POSTGRES_USER: postgres
+                  POSTGRES_PASSWORD: $DB_PASSWORD
+                volumes:
+                  - pgdata-prod:/var/lib/postgresql/data
+                networks:
+                  - taskmanager-net
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U postgres"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 5
+                restart: always
+
+              api:
+                image: $API_IMAGE
+                container_name: taskmanager-api-prod
+                ports:
+                  - "5002:5002"
+                environment:
+                  NODE_ENV: production
+                  PORT: 5002
+                  DB_HOST: db
+                  DB_PORT: 5432
+                  DB_NAME: taskmanager_db
+                  DB_USER: postgres
+                  DB_PASSWORD: $DB_PASSWORD
+                  JWT_SECRET: $JWT_SECRET
+                  JWT_EXPIRE: 7d
+                  CLIENT_URL: https://taskManagement.govinsaga.pp.ua
+                depends_on:
+                  db:
+                    condition: service_healthy
+                networks:
+                  - taskmanager-net
+                restart: always
+
+            volumes:
+              pgdata-prod:
+
+            networks:
+              taskmanager-net:
+                driver: bridge
+            COMPOSE_EOF
+
+            # Login to GHCR
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Pull and restart containers
+            export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
+            export JWT_SECRET="${{ secrets.JWT_SECRET }}"
+            export API_IMAGE="${{ env.API_IMAGE }}:latest"
+
+            docker compose -f docker-compose.prod.yml pull api
+            docker compose -f docker-compose.prod.yml up -d
+
+            # Cleanup old images
+            docker image prune -f
+
+      # ─── Deploy Frontend Static Files ────────────────────
+      - name: Copy frontend build to OCI
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USER }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          source: "client/dist/*"
+          target: "/var/www/tasks-ui"
+          strip_components: 2
+
+      - name: Reload Nginx
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ${{ secrets.OCI_USER }}
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script: sudo nginx -t && sudo systemctl reload nginx
